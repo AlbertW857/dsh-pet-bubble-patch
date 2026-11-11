@@ -246,7 +246,8 @@ Object.assign(PetSprite.prototype, {
       this.chatOpen ||
       this.todoOpen ||
       this.balanceClickable() ||
-      this.workClickable()
+      this.workClickable() ||
+      !!this.whisperMore
     );
   },
 
@@ -356,7 +357,8 @@ Object.assign(PetSprite.prototype, {
     // 光标存视口坐标（窗口原点 + 窗口内坐标）：窗口随宠物移动时贴光标不会漂。必须在 setTip 之前
     // 更新——setTip 变显隐时会立刻渲染一次，晚一步就会用上一次的光标摆位。
     if (inBody) this.tipCursor = { x: this.pos.x - this.winOffset.x + wx, y: this.pos.y - this.winOffset.y + wy };
-    this.setInteractive(inBody);
+    // whisperMore：气泡上的「继续聊」悬在身体外，按 inBody 翻转的话点不到，交给 busy + 矩形裁定。
+    this.setInteractive(inBody || !!this.whisperMore);
     // 悬浮提示与可交互判定同源（同一个 inBody）：进身体出现，离开收起
     this.setTip(inBody);
     // 跟随光标：位置依赖光标，每次移动都要重摆（setTip 只在显隐变化时渲染）

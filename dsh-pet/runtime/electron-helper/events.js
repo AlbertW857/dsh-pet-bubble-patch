@@ -219,7 +219,11 @@ PetSprite.prototype.showWhisper = function showWhisper(text, image, url, duratio
   this.whisperImage = typeof image === 'string' ? image : '';
   this.whisperUrl = typeof url === 'string' ? url : '';
   // 收起时机交给收起计划：这句要念时，随后的语音开始事件会把它挂起（见 applyWhisperHold）。
-  this.applyWhisperHold({ durationMs: duration ?? BUBBLE_DURATION_MS, kind: 'show' });
+  // 长回复给足阅读时间：10s 起，按字数递增，上限 27s（与浏览器端同一公式）
+  this.applyWhisperHold({
+    durationMs: duration ?? Math.max(BUBBLE_DURATION_MS, Math.min(27e3, text.length * 90)),
+    kind: 'show',
+  });
 };
 
 // 余额展示（气泡 + 档位动画）：周期轮询与菜单点播共用同一展示路径，视觉与行为严格一致。

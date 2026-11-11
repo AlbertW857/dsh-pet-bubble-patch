@@ -1,0 +1,151 @@
+From 06e1f4b29ad1f39e58f42fe690a1130a38f906f3 Mon Sep 17 00:00:00 2001
+From: Rudius <rudius@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 03:54:34 +0800
+Subject: [PATCH] =?UTF-8?q?feat(desktop):=20=E7=A2=8E=E7=A2=8E=E5=BF=B5?=
+ =?UTF-8?q?=E6=B0=94=E6=B3=A1=E8=A3=81=E5=88=B0=203=20=E8=A1=8C=EF=BC=8C?=
+ =?UTF-8?q?=E6=BA=A2=E5=87=BA=E6=97=B6=E7=BB=99=E3=80=8C=E7=BB=A7=E7=BB=AD?=
+ =?UTF-8?q?=E8=81=8A=20=E2=96=B8=E3=80=8D=E5=85=A5=E5=8F=A3?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ dsh-pet/runtime/electron-helper/events.js     |  6 +++-
+ dsh-pet/runtime/electron-helper/index.html    | 21 +++++++++++
+ .../runtime/electron-helper/sprite/bubble.js  | 36 ++++++++++++++++++-
+ .../runtime/electron-helper/sprite/input.js   |  6 ++--
+ 4 files changed, 65 insertions(+), 4 deletions(-)
+
+diff --git a/dsh-pet/runtime/electron-helper/events.js b/dsh-pet/runtime/electron-helper/events.js
+index 8a74dd7..a7fd3f3 100644
+--- a/dsh-pet/runtime/electron-helper/events.js
++++ b/dsh-pet/runtime/electron-helper/events.js
+@@ -219,7 +219,11 @@ PetSprite.prototype.showWhisper = function showWhisper(text, image, url, duratio
+   this.whisperImage = typeof image === 'string' ? image : '';
+   this.whisperUrl = typeof url === 'string' ? url : '';
+   // 收起时机交给收起计划：这句要念时，随后的语音开始事件会把它挂起（见 applyWhisperHold）。
+-  this.applyWhisperHold({ durationMs: duration ?? BUBBLE_DURATION_MS, kind: 'show' });
++  // 长回复给足阅读时间：10s 起，按字数递增，上限 27s（与浏览器端同一公式）
++  this.applyWhisperHold({
++    durationMs: duration ?? Math.max(BUBBLE_DURATION_MS, Math.min(27e3, text.length * 90)),
++    kind: 'show',
++  });
+ };
+ 
+ // 余额展示（气泡 + 档位动画）：周期轮询与菜单点播共用同一展示路径，视觉与行为严格一致。
+diff --git a/dsh-pet/runtime/electron-helper/index.html b/dsh-pet/runtime/electron-helper/index.html
+index 9509784..33b5b67 100644
+--- a/dsh-pet/runtime/electron-helper/index.html
++++ b/dsh-pet/runtime/electron-helper/index.html
+@@ -143,6 +143,27 @@
+         min-width: calc(var(--f) * 2.1978);
+         max-width: min(calc(var(--f) * 10.989), 100%);
+       }
++
++      /* 碎碎念正文裁到 3 行：4.8em = 3 × line-height 1.6，随字号自动换算（与浏览器端同一口径） */
++      .pet-bubble .pet-bub-clip {
++        max-height: 4.8em;
++        overflow: hidden;
++      }
++
++      /* 溢出时出现的「继续聊 ▸」：只在自己身上开命中，气泡本体默认仍不挡下层应用 */
++      .pet-bubble .pet-bub-more {
++        display: none;
++        margin-top: calc(var(--f) * 0.2);
++        font-size: calc(var(--f) * 0.75);
++        color: rgba(43, 43, 43, 0.62);
++        text-align: right;
++        pointer-events: auto;
++        cursor: pointer;
++      }
++
++      .pet-bubble .pet-bub-more:hover {
++        color: #2b2b2b;
++      }
+       .pet-bub-row {
+         display: flex;
+         justify-content: space-between;
+diff --git a/dsh-pet/runtime/electron-helper/sprite/bubble.js b/dsh-pet/runtime/electron-helper/sprite/bubble.js
+index d09c74e..a9c27b3 100644
+--- a/dsh-pet/runtime/electron-helper/sprite/bubble.js
++++ b/dsh-pet/runtime/electron-helper/sprite/bubble.js
+@@ -72,6 +72,8 @@ Object.assign(PetSprite.prototype, {
+       workTerminal && workOn ? 'work' : whisperOn ? 'whisper' : balanceOn ? 'balance' : workOn ? 'work' : 'none';
+     // 记住当前槽位：点击处理在 init.js，必须知道「现在显示的是哪一种气泡」才能分清翻页与跳会话。
+     this.bubbleSlot = slot;
++    // 上一轮可能留了「继续聊」的输入租约：先撤销，溢出判定通过后再立（见 rAF）。
++    this.whisperMore = false;
+     // 配图两种形态二选一：url 用完整地址，image 按素材根拼表情包路径；样式/class 共用。
+     const whisperImg =
+       slot === 'whisper'
+@@ -109,10 +111,42 @@ Object.assign(PetSprite.prototype, {
+     } else if (slot === 'whisper') {
+       // 配图（shared 生成的 <img> + 共用样式）：先看图再读话
+       if (whisperImg) this.bubble.appendChild(whisperImg);
++      // 正文裁到 3 行；溢出的部分由「继续聊 ▸」兜底（点它开对话弹窗）。
++      const clip = document.createElement('div');
++      clip.className = 'pet-bub-clip';
+       const line = document.createElement('div');
+       line.className = 'pet-bub-row';
+       line.textContent = this.whisperView[0]?.text ?? '';
+-      this.bubble.appendChild(line);
++      clip.appendChild(line);
++      this.bubble.appendChild(clip);
++      const more = document.createElement('span');
++      more.className = 'pet-bub-more';
++      more.textContent = '继续聊 ▸';
++      more.addEventListener('click', (e) => {
++        e.stopPropagation();
++        this.applyWhisperHold({ kind: 'hide' });
++        this.showChatFromMenu();
++      });
++      // 鼠标停在按钮上时挂起收起计划：气泡 10s 就消失的话根本来不及点
++      more.addEventListener('mouseenter', () => this.applyWhisperHold({ durationMs: 0, kind: 'hold', seq: 'more' }));
++      more.addEventListener('mouseleave', () => this.applyWhisperHold({ durationMs: 8000, kind: 'show' }));
++      this.bubble.appendChild(more);
++      // 量真实溢出：rAF 内读 scrollHeight 才值这一帧的布局；display 必须写内联，
++      // 否则下一次 renderBubble 重设 className/子节点时类名方案会被抹掉。
++      requestAnimationFrame(() => {
++        if (!this.bubble.contains(clip)) return;
++        const over = clip.scrollHeight > clip.clientHeight + 1;
++        more.style.display = over ? 'block' : 'none';
++        if (over) {
++          // 整泡参与命中区：主进程按 .pet-bubble.is-clickable 的矩形放行鼠标（见 syncInputBusy）。
++          // whisperMore 是输入租约：光登记矩形不够——光标在身体外时 onMouseMove 会把窗口翻回穿透，
++          // 气泡悬在头上，永远等不到 click。与余额气泡同一套 busy + rects 机制。
++          this.whisperMore = true;
++          this.bubble.classList.add('is-clickable');
++          this.syncInputBusy();
++          this.setInteractive(true);
++        }
++      });
+       // 语音状态角标：idle 时什么都不加；failed 用静音喇叭，表示这句没念出来
+       const voice = S.getVoiceState();
+       if (voice !== 'idle') {
+diff --git a/dsh-pet/runtime/electron-helper/sprite/input.js b/dsh-pet/runtime/electron-helper/sprite/input.js
+index dc67e28..1eecafd 100644
+--- a/dsh-pet/runtime/electron-helper/sprite/input.js
++++ b/dsh-pet/runtime/electron-helper/sprite/input.js
+@@ -246,7 +246,8 @@ Object.assign(PetSprite.prototype, {
+       this.chatOpen ||
+       this.todoOpen ||
+       this.balanceClickable() ||
+-      this.workClickable()
++      this.workClickable() ||
++      !!this.whisperMore
+     );
+   },
+ 
+@@ -356,7 +357,8 @@ Object.assign(PetSprite.prototype, {
+     // 光标存视口坐标（窗口原点 + 窗口内坐标）：窗口随宠物移动时贴光标不会漂。必须在 setTip 之前
+     // 更新——setTip 变显隐时会立刻渲染一次，晚一步就会用上一次的光标摆位。
+     if (inBody) this.tipCursor = { x: this.pos.x - this.winOffset.x + wx, y: this.pos.y - this.winOffset.y + wy };
+-    this.setInteractive(inBody);
++    // whisperMore：气泡上的「继续聊」悬在身体外，按 inBody 翻转的话点不到，交给 busy + 矩形裁定。
++    this.setInteractive(inBody || !!this.whisperMore);
+     // 悬浮提示与可交互判定同源（同一个 inBody）：进身体出现，离开收起
+     this.setTip(inBody);
+     // 跟随光标：位置依赖光标，每次移动都要重摆（setTip 只在显隐变化时渲染）
+-- 
+2.56.0.windows.4.niugit
+

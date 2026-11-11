@@ -72,6 +72,8 @@ Object.assign(PetSprite.prototype, {
       workTerminal && workOn ? 'work' : whisperOn ? 'whisper' : balanceOn ? 'balance' : workOn ? 'work' : 'none';
     // 记住当前槽位：点击处理在 init.js，必须知道「现在显示的是哪一种气泡」才能分清翻页与跳会话。
     this.bubbleSlot = slot;
+    // 上一轮可能留了「继续聊」的输入租约：先撤销，溢出判定通过后再立（见 rAF）。
+    this.whisperMore = false;
     // 配图两种形态二选一：url 用完整地址，image 按素材根拼表情包路径；样式/class 共用。
     const whisperImg =
       slot === 'whisper'
@@ -109,10 +111,42 @@ Object.assign(PetSprite.prototype, {
     } else if (slot === 'whisper') {
       // 配图（shared 生成的 <img> + 共用样式）：先看图再读话
       if (whisperImg) this.bubble.appendChild(whisperImg);
+      // 正文裁到 3 行；溢出的部分由「继续聊 ▸」兜底（点它开对话弹窗）。
+      const clip = document.createElement('div');
+      clip.className = 'pet-bub-clip';
       const line = document.createElement('div');
       line.className = 'pet-bub-row';
       line.textContent = this.whisperView[0]?.text ?? '';
-      this.bubble.appendChild(line);
+      clip.appendChild(line);
+      this.bubble.appendChild(clip);
+      const more = document.createElement('span');
+      more.className = 'pet-bub-more';
+      more.textContent = '继续聊 ▸';
+      more.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.applyWhisperHold({ kind: 'hide' });
+        this.showChatFromMenu();
+      });
+      // 鼠标停在按钮上时挂起收起计划：气泡 10s 就消失的话根本来不及点
+      more.addEventListener('mouseenter', () => this.applyWhisperHold({ durationMs: 0, kind: 'hold', seq: 'more' }));
+      more.addEventListener('mouseleave', () => this.applyWhisperHold({ durationMs: 8000, kind: 'show' }));
+      this.bubble.appendChild(more);
+      // 量真实溢出：rAF 内读 scrollHeight 才值这一帧的布局；display 必须写内联，
+      // 否则下一次 renderBubble 重设 className/子节点时类名方案会被抹掉。
+      requestAnimationFrame(() => {
+        if (!this.bubble.contains(clip)) return;
+        const over = clip.scrollHeight > clip.clientHeight + 1;
+        more.style.display = over ? 'block' : 'none';
+        if (over) {
+          // 整泡参与命中区：主进程按 .pet-bubble.is-clickable 的矩形放行鼠标（见 syncInputBusy）。
+          // whisperMore 是输入租约：光登记矩形不够——光标在身体外时 onMouseMove 会把窗口翻回穿透，
+          // 气泡悬在头上，永远等不到 click。与余额气泡同一套 busy + rects 机制。
+          this.whisperMore = true;
+          this.bubble.classList.add('is-clickable');
+          this.syncInputBusy();
+          this.setInteractive(true);
+        }
+      });
       // 语音状态角标：idle 时什么都不加；failed 用静音喇叭，表示这句没念出来
       const voice = S.getVoiceState();
       if (voice !== 'idle') {
