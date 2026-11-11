@@ -3,6 +3,9 @@
 // 用法：node tools/apply.mjs <electron-helper 目录> [--revert]
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 const dir = process.argv[2];
 const revert = process.argv.includes('--revert');
@@ -19,26 +22,25 @@ const stamp = new Date().toISOString().replace(/[:.]/g, '-');
 const FILES = ['index.html', 'events.js', 'sprite/bubble.js', 'sprite/input.js'];
 
 if (revert) {
-  for (const rel of FILES) {
+  for (const rel of [...FILES, 'shared-core.js']) {
     const p = path.join(dir, rel);
-    const own = fs.readdirSync(path.dirname(p)).filter((f) => f.startsWith(path.basename(p) + '.bak-')).sort();
+    const own = fs
+      .readdirSync(path.dirname(p))
+      .filter((f) => f.startsWith(path.basename(p) + '.bak'))
+      .map((f) => ({ f, t: fs.statSync(path.join(path.dirname(p), f)).mtimeMs }))
+      .sort((a, b) => a.t - b.t); // 最早的那份才是原始文件
     if (!own.length) {
       console.log('跳过（没有备份）:', rel);
       continue;
     }
-    fs.copyFileSync(path.join(path.dirname(p), own[own.length - 1]), p);
-    console.log('已恢复:', rel, '<-', own[own.length - 1]);
+    fs.copyFileSync(path.join(path.dirname(p), own[0].f), p);
+    console.log('已恢复:', rel, '<-', own[0].f);
   }
   console.log('回滚完成，重启桌面 helper 生效。');
   process.exit(0);
 }
 
 const READ = (rel) => fs.readFileSync(path.join(dir, rel), 'utf8');
-const whole = FILES.map(READ).join('\n');
-if (whole.includes('pet-bub-more')) {
-  console.log('看起来已经打过补丁（找到 pet-bub-more），跳过。要重来请先 --revert。');
-  process.exit(0);
-}
 
 const CLIP_BLOCK = `      if (whisperImg) this.bubble.appendChild(whisperImg);
       // 正文裁到 3 行；溢出的部分由「继续聊 ▸」兜底（点它开对话弹窗）。
@@ -139,7 +141,9 @@ const EDITS = {
 for (const [rel, pairs] of Object.entries(EDITS)) {
   const p = path.join(dir, rel);
   let s = fs.readFileSync(p, 'utf8');
+  let touched = 0;
   for (const [a, b] of pairs) {
+    if (s.includes(b)) continue; // 这一处已经打过了
     const c = s.split(a).length - 1;
     if (c !== 1) {
       console.error(`落点不唯一（${rel}，命中 ${c} 次）：`, a.split('\n')[0].slice(0, 60));
@@ -147,9 +151,66 @@ for (const [rel, pairs] of Object.entries(EDITS)) {
       process.exit(1);
     }
     s = s.split(a).join(b);
+    touched++;
+  }
+  if (!touched) {
+    console.log('跳过（已打过）:', rel);
+    continue;
   }
   fs.copyFileSync(p, p + '.bak-' + stamp);
   fs.writeFileSync(p, s);
   console.log('已改:', rel, '(备份 .bak-' + stamp + ')');
 }
+/** 迷你 unified-diff 应用器：只处理单文件补丁（git diff 输出），逐 hunk 校验上下文。 */
+function applyUnifiedPatch(text, patchText) {
+  const lines = text.split('\n');
+  const body = patchText.slice(patchText.indexOf('diff --git'));
+  const hunks = [];
+  let cur = null;
+  for (const line of body.split('\n')) {
+    const m = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
+    if (m) { cur = { oldStart: Number(m[1]), lines: [] }; hunks.push(cur); continue; }
+    if (!cur) continue;
+    if (line === '' || line.startsWith('\\')) continue;
+    const c = line[0];
+    if (c === ' ' || c === '+' || c === '-') cur.lines.push(line);
+    else break; // 单文件补丁：遇到 diff --git / 尾部统计就结束
+  }
+  if (!hunks.length) throw new Error('补丁里没有 hunk');
+  const same = (at, want) => want.every((w, i) => lines[at + i] === w);
+  const out = [];
+  let idx = 0;
+  for (const h of hunks) {
+    const oldLines = h.lines.filter((l) => l[0] !== '+').map((l) => l.slice(1));
+    const newLines = h.lines.filter((l) => l[0] !== '-').map((l) => l.slice(1));
+    let at = h.oldStart - 1; // hunk 的行号始终是原文件坐标
+    if (!same(at, oldLines)) {
+      let found = -1;
+      for (let i = Math.max(0, at - 40); i <= Math.min(lines.length, at + 40); i++) {
+        if (same(i, oldLines)) { found = i; break; }
+      }
+      if (found < 0) throw new Error('hunk 落点找不到（旧起点 ' + h.oldStart + '）');
+      at = found;
+    }
+    out.push(...lines.slice(idx, at), ...newLines);
+    idx = at + oldLines.length;
+  }
+  out.push(...lines.slice(idx));
+  return out.join('\n');
+}
+
+const scPath = path.join(dir, 'shared-core.js');
+if (fs.existsSync(scPath)) {
+  const sc = fs.readFileSync(scPath, 'utf8');
+  if (sc.includes('dsh-pet-chat-log')) {
+    console.log('跳过 0002：shared-core.js 已有聊天窗消息区。');
+  } else {
+    const pf = path.join(ROOT, 'patches', '0002-chat-log.patch');
+    const patched = applyUnifiedPatch(sc, fs.readFileSync(pf, 'utf8'));
+    fs.copyFileSync(scPath, scPath + '.bak-' + stamp);
+    fs.writeFileSync(scPath, patched);
+    console.log('已应用 0002：聊天窗消息区（备份 shared-core.js.bak-' + stamp + '）。');
+  }
+}
+
 console.log('完成，重启桌面 helper 生效。');
