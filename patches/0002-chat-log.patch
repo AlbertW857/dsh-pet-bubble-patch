@@ -1,0 +1,123 @@
+diff --git a/dsh-pet/runtime/electron-helper/shared-core.js b/dsh-pet/runtime/electron-helper/shared-core.js
+index 198888d..6042785 100644
+--- a/dsh-pet/runtime/electron-helper/shared-core.js
++++ b/dsh-pet/runtime/electron-helper/shared-core.js
+@@ -2210,7 +2210,15 @@ const CHAT_CSS = [
+ 	"font-size:12px;line-height:1;padding:2px 3px;border-radius:4px}",
+ 	".dsh-pet-chat-attach-x:hover{background:rgba(0,0,0,.08);color:rgba(43,43,43,.85)}",
+ 	".dsh-pet-chat-hint{display:none;color:rgba(43,43,43,.55);font-size:12px;padding:0 12px 8px}",
+-	".dsh-pet-chat-err{color:#d94f3d;font-size:12px;padding:0 12px 8px;white-space:pre-wrap;overflow-wrap:anywhere}"
++	".dsh-pet-chat-err{color:#d94f3d;font-size:12px;padding:0 12px 8px;white-space:pre-wrap;overflow-wrap:anywhere}",
++	".dsh-pet-chat-log{display:none;flex-direction:column;gap:6px;padding:9px 10px 2px;max-height:min(46vh,300px);overflow-y:auto;overflow-x:hidden;scrollbar-width:thin}",
++	".dsh-pet-chat.has-log{width:260px!important}",
++	".dsh-pet-chat.has-log .dsh-pet-chat-log{display:flex}",
++	".dsh-pet-chat-msg{font-size:13px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;padding:6px 9px;border-radius:10px;max-width:92%}",
++	".dsh-pet-chat-msg[data-role=user]{align-self:flex-end;background:rgba(64,120,255,.13);color:#1f2b46}",
++	".dsh-pet-chat-msg[data-role=pet]{align-self:flex-start;background:rgba(0,0,0,.05);color:#2b2b2b}",
++	".dsh-pet-chat-msg img{display:block;max-width:100%;margin-top:4px;border-radius:8px}",
++	".dsh-pet-chat-msg[data-role=pet][data-pending=1]{opacity:.6}"
+ ].join("");
+ const CHAT_MIN_W = 160;
+ const CHAT_MAX_W = 340;
+@@ -2306,7 +2314,40 @@ function createChatDom(opts = {}) {
+ 	const actions = document.createElement("div");
+ 	actions.className = "dsh-pet-chat-actions";
+ 	actions.append(pickBtn, shotBtn, micBtn, fileInput, attach);
+-	root.append(input, actions, hint, err);
++	const log = document.createElement("div");
++	log.className = "dsh-pet-chat-log";
++	/** 往窗口里追加一条消息；role 只用 user / pet 两值。 */
++	const appendMsg = (role, text, image) => {
++		if (!text && !image) return;
++		const row = document.createElement("div");
++		row.className = "dsh-pet-chat-msg";
++		row.dataset.role = role;
++		if (text) row.appendChild(document.createTextNode(text));
++		if (image) {
++			// 桌面是 file:// 页面：宿主给的是表情包名，必须以 BASE 绝对前缀解析，规则同气泡配图
++			// （见 sprite/bubble.js 的 createMemeImage(..., BASE, assetRoot)）；绝对地址原样使用。
++			const raw = String(image ?? "").trim();
++			const src = /^(https?:|data:|file:|blob:)/i.test(raw)
++				? raw
++				: typeof BASE === "string" && BASE
++					? raw.startsWith("/")
++						? BASE.replace(/\/$/, "") + raw
++						: memeImageUrl(raw, BASE)
++					: raw;
++			if (src) {
++				const img = document.createElement("img");
++				img.alt = "图片";
++				img.src = src;
++				img.addEventListener("error", () => img.remove());
++				row.appendChild(img);
++			}
++		}
++		log.appendChild(row);
++		while (log.childElementCount > 60) log.firstElementChild.remove();
++		root.classList.add("has-log");
++		log.scrollTop = log.scrollHeight;
++	};
++	root.append(log, input, actions, hint, err);
+ 	document.body.appendChild(root);
+ 	const resizeInput = enableAutoResize(input, root);
+ 	let attachment;
+@@ -2392,6 +2433,8 @@ function createChatDom(opts = {}) {
+ 		setImageFile,
+ 		setEncoded: applyEncoded,
+ 		getAttachment: () => attachment,
++		appendMsg,
++		getAttachmentPreview: () => thumb.getAttribute("src") || "",
+ 		isEncoding: () => encoding || capturing,
+ 		flash,
+ 		startHear: hear.start,
+@@ -2452,7 +2495,11 @@ async function sendChat(baseUrl, text, attachment) {
+ 		reason: o.reason === "provider-missing" || o.reason === "generate-error" || o.reason === "config-error" ? o.reason : "bad-request",
+ 		message: typeof o.message === "string" ? o.message : void 0
+ 	};
+-	return { ok: true };
++	return {
++		ok: true,
++		text: typeof o.text === "string" ? o.text : "",
++		image: typeof o.image === "string" ? o.image : void 0
++	};
+ }
+ 
+ //#endregion
+@@ -2484,10 +2531,20 @@ function bindSend(binding) {
+ 		}
+ 		const text = binding.input.value.trim();
+ 		if (!text) return;
++		const attachment = binding.attachment();
++		const preview = attachment && binding.attachmentPreview ? binding.attachmentPreview() : "";
+ 		sending = true;
+ 		binding.input.disabled = true;
+-		sendChat(binding.url, text, binding.attachment()).then((state) => {
+-			if (state.ok) binding.onOk();
++		binding.appendMsg("user", text, preview);
++		sendChat(binding.url, text, attachment).then((state) => {
++			if (state.ok) {
++				if (state.text || state.image) binding.appendMsg("pet", state.text || "", state.image || "");
++				else binding.appendMsg("pet", "（这次没有回复）", "");
++				binding.input.value = "";
++				if (binding.clearAttach) binding.clearAttach();
++				if (binding.onAppended) binding.onAppended();
++				binding.onOk(state);
++			}
+ 			else {
+ 				binding.err.textContent = "对话失败：" + (state.message ?? state.reason);
+ 				binding.err.style.display = "block";
+@@ -2560,10 +2617,13 @@ function mountChatDialog(opts) {
+ 		url: withPet,
+ 		isClosed: () => closed,
+ 		onOk: () => {
+-			close();
+ 			if (onSent) onSent();
+ 		},
+ 		attachment: () => dom.getAttachment(),
++		attachmentPreview: () => dom.getAttachmentPreview(),
++		appendMsg: (role, text, image) => dom.appendMsg(role, text, image),
++		clearAttach: () => dom.clearAttach(),
++		onAppended: () => requestAnimationFrame(place),
+ 		isEncoding: () => dom.isEncoding(),
+ 		notify: (text) => dom.flash(text)
+ 	});
