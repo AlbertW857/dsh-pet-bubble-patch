@@ -213,4 +213,19 @@ if (fs.existsSync(scPath)) {
   }
 }
 
+// 0003：聊天窗重开时预载最近 20 轮历史（同文件，故在其后单独一段，先重读）
+if (fs.existsSync(scPath)) {
+  if (fs.readFileSync(scPath, 'utf8').includes('const setHistory = (list)')) {
+    console.log('跳过 0003：shared-core.js 已有历史预载。');
+  } else {
+    const sc3 = fs.readFileSync(scPath, 'utf8');
+    const pf3 = path.join(ROOT, 'patches', '0003-chat-history.patch');
+    const patched3 = applyUnifiedPatch(sc3, fs.readFileSync(pf3, 'utf8'));
+    const bak3 = scPath + '.bak-' + stamp;
+    if (!fs.existsSync(bak3)) fs.copyFileSync(scPath, bak3); // 同一轮已备份过就别覆盖（回滚取最早一份）
+    fs.writeFileSync(scPath, patched3);
+    console.log('已应用 0003：历史预载（备份 shared-core.js.bak-' + stamp + '）。');
+  }
+}
+
 console.log('完成，重启桌面 helper 生效。');
