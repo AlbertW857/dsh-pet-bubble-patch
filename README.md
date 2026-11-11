@@ -73,3 +73,14 @@ git apply -p1 patches/0001-feat-desktop-3.patch
 ## 许可
 
 补丁本身随上游 [MIT](https://github.com/PC2005-cloud/dsh-pet/blob/main/LICENSE) 发布；文件内容版权归上游作者。
+
+## 已验证基线
+
+| 基线 | 来源 | 验证方法 | 结果 |
+|---|---|---|---|
+| npm 0.4.7（用户实际在跑的） | 安装目录 `node_modules/dsh-pet/runtime/electron-helper` | 取补丁前的原始文件 → `node tools/apply.mjs` | 4 个文件与已打补丁的现场**逐字节一致** |
+| upstream main (`3a65719`) | `PC2005-cloud/dsh-pet` | `git show upstream/main:<file>` 导出 → `apply.mjs` | 与仓库 HEAD 文件**逐字节一致** |
+
+注意 `index.html` 在两套基线之间有上游漂移：upstream main 的 `#root` 已是 `position:absolute;inset:0`，npm 0.4.7 还是 `position:relative;width/height:100%`。`apply.mjs` 用锚点插入 CSS，两套都能命中；**不要**把某一版的 `index.html` 直接覆盖到另一版上。
+
+回滚：`node tools/apply.mjs <dir> --revert`，按 `<file>.bak-*` 里最新的一份恢复。
