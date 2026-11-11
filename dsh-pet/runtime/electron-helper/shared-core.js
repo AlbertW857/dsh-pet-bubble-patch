@@ -2316,17 +2316,20 @@ function createChatDom(opts = {}) {
 	actions.append(pickBtn, shotBtn, micBtn, fileInput, attach);
 	const log = document.createElement("div");
 	log.className = "dsh-pet-chat-log";
-	/** 往窗口里追加一条消息；role 只用 user / pet 两值。 */
-	const appendMsg = (role, text, image) => {
-		if (!text && !image) return;
+	/** 消息区最多保留的条数：再老的直接丢掉，弹窗不是档案库。 */
+	const LOG_MAX = 60;
+	const trimLog = () => {
+		while (log.childElementCount > LOG_MAX) log.firstElementChild.remove();
+	};
+	/** 造一条消息行：正文 + 配图。桌面是 file:// 页面，配图名必须以 BASE 绝对前缀解析
+	*  （规则同气泡配图，见 sprite/bubble.js 的 createMemeImage(..., BASE, assetRoot)）；绝对地址原样使用。 */
+	const buildRow = (role, text, image) => {
 		const row = document.createElement("div");
 		row.className = "dsh-pet-chat-msg";
 		row.dataset.role = role;
 		if (text) row.appendChild(document.createTextNode(text));
-		if (image) {
-			// 桌面是 file:// 页面：宿主给的是表情包名，必须以 BASE 绝对前缀解析，规则同气泡配图
-			// （见 sprite/bubble.js 的 createMemeImage(..., BASE, assetRoot)）；绝对地址原样使用。
-			const raw = String(image ?? "").trim();
+		const raw = String(image ?? "").trim();
+		if (raw) {
 			const src = /^(https?:|data:|file:|blob:)/i.test(raw)
 				? raw
 				: typeof BASE === "string" && BASE
@@ -2342,8 +2345,40 @@ function createChatDom(opts = {}) {
 				row.appendChild(img);
 			}
 		}
-		log.appendChild(row);
-		while (log.childElementCount > 60) log.firstElementChild.remove();
+		return row;
+	};
+	/** 本窗内已显示的消息，用于和预载历史去重（打开后立刻发消息时会撞上）。 */
+	const localMsgs = [];
+	/** 往窗口里追加一条消息；role 只用 user / pet 两值。 */
+	const appendMsg = (role, text, image) => {
+		if (!text && !image) return;
+		log.appendChild(buildRow(role, text, image));
+		localMsgs.push({ role, text: String(text ?? "") });
+		trimLog();
+		root.classList.add("has-log");
+		log.scrollTop = log.scrollHeight;
+	};
+	/**
+	* 预载历史：宿主 GET /chat 返回最近 N 轮，按时间正序插到已有内容前面。
+	* 若用户已经先发过几轮（历史里也有这几轮），把历史尾部与本地重复的那些条目去掉。
+	*/
+	const setHistory = (list) => {
+		if (!Array.isArray(list) || list.length === 0) return;
+		const hist = list.filter((m) => m && (m.role === "user" || m.role === "assistant"));
+		let tail = hist.length;
+		for (let i = 0; i < localMsgs.length && tail > 0; i++) {
+			const a = hist[tail - 1];
+			const b = localMsgs[localMsgs.length - 1 - i];
+			const sameRole = (a.role === "user") === (b.role === "user");
+			if (!a || !sameRole || String(a.content ?? "") !== b.text) break;
+			tail -= 1;
+		}
+		const frag = document.createDocumentFragment();
+		for (const m of hist.slice(0, tail)) {
+			frag.appendChild(buildRow(m.role === "user" ? "user" : "pet", String(m.content ?? ""), m.meme ?? ""));
+		}
+		log.insertBefore(frag, log.firstChild);
+		trimLog();
 		root.classList.add("has-log");
 		log.scrollTop = log.scrollHeight;
 	};
@@ -2434,6 +2469,7 @@ function createChatDom(opts = {}) {
 		setEncoded: applyEncoded,
 		getAttachment: () => attachment,
 		appendMsg,
+		setHistory,
 		getAttachmentPreview: () => thumb.getAttribute("src") || "",
 		isEncoding: () => encoding || capturing,
 		flash,
@@ -2632,6 +2668,13 @@ function mountChatDialog(opts) {
 	if (opts.initialImage) dom.setImageFile(opts.initialImage);
 	if (opts.initialEncoded) dom.setEncoded(opts.initialEncoded);
 	input.focus();
+	// 预载最近历史：此前弹窗只管输入，重开就看不到上几轮。失败静默——历史只是加分项，不能挡住输入。
+	fetch(withPet + "&rounds=20", { headers: { accept: "application/json" } })
+		.then((r) => r.json())
+		.then((o) => {
+			if (!closed && o && o.ok === true && Array.isArray(o.messages)) dom.setHistory(o.messages);
+		})
+		.catch(() => void 0);
 	return {
 		el: root,
 		close,
