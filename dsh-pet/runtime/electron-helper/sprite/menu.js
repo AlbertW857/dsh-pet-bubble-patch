@@ -35,6 +35,12 @@ Object.assign(PetSprite.prototype, {
       { label: '待办事项', action: 'todo', hint: S.TODO_HOTKEY_HINT },
       { label: '碎碎念', action: 'whisper' },
       { label: '对话', action: 'chat', hint: S.CHAT_HOTKEY_HINT },
+      // 只切「长回复是否自动开窗」，与上面的「对话」是两件事：点这项不会弹窗
+      {
+        label: '对话模式：' + (S.getChatMode(this.pet.id) === 'talk' ? '长谈' : '闲聊'),
+        action: 'chat-mode',
+        hint: S.getChatMode(this.pet.id) === 'talk' ? '点一下切到闲聊' : '点一下切到长谈',
+      },
     ];
     // 「配图」：与浏览器端同一份分支（纳入对话的配图 / 其他），点一张就用它说一句；没有可用图时
     // 返回 null，整项不出现。数据来自拍平层吹入的条目级字段（this.pet.memes / chatImageEnabled /
@@ -129,6 +135,11 @@ Object.assign(PetSprite.prototype, {
     }
     if (leaf.action === 'chat') {
       this.showChatFromMenu(); // 打开对话弹窗（记忆经 host /chat 读写，浏览器/桌面同一实例共享）
+      return;
+    }
+    if (leaf.action === 'chat-mode') {
+      // 只切模式，不弹窗：下一次长回复按新模式走；窗口里的按钮同步显示当前模式
+      S.toggleChatMode(this.pet.id);
       return;
     }
     if (leaf.action === 'todo') {

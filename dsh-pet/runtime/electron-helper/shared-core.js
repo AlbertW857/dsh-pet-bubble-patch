@@ -2192,6 +2192,8 @@ const CHAT_CSS = [
 	".dsh-pet-chat-input::placeholder{color:rgba(43,43,43,.45)}",
 	".dsh-pet-chat-input:disabled{opacity:.55}",
 	".dsh-pet-chat-actions{display:flex;align-items:center;gap:6px;padding:0 8px 7px}",
+	".dsh-pet-chat-mode{margin-right:auto;font-size:12px;line-height:1;padding:4px 8px;border-radius:999px;border:1px solid rgba(43,43,43,.18);background:rgba(255,255,255,.7);color:#4a4a4a;cursor:pointer}",
+	".dsh-pet-chat-mode[data-mode=talk]{border-color:#5b8def;color:#2f5fd0;background:rgba(91,141,239,.12)}",
 	".dsh-pet-chat-btn{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;",
 	"border:none;border-radius:6px;background:transparent;color:rgba(43,43,43,.62);font-size:14px;line-height:1;",
 	"cursor:pointer;transition:background .15s,color .15s}",
@@ -2313,7 +2315,18 @@ function createChatDom(opts = {}) {
 	attach.append(thumb, attachX);
 	const actions = document.createElement("div");
 	actions.className = "dsh-pet-chat-actions";
-	actions.append(pickBtn, shotBtn, micBtn, fileInput, attach);
+	// 模式开关：只影响「长回复要不要自动开窗」，不改模型、不改人设
+	const modeBtn = document.createElement("button");
+	modeBtn.type = "button";
+	modeBtn.className = "dsh-pet-chat-mode";
+	modeBtn.title = "切换对话模式：闲聊＝只弹输入框、发完就收，回复看气泡；长谈＝带聊天记录，长回复自动开窗";
+	const renderMode = () => {
+		const m = getChatMode(opts.petId);
+		modeBtn.textContent = m === "talk" ? "长谈" : "闲聊";
+		modeBtn.dataset.mode = m;
+	};
+	renderMode();
+	actions.append(modeBtn, pickBtn, shotBtn, micBtn, fileInput, attach);
 	const log = document.createElement("div");
 	log.className = "dsh-pet-chat-log";
 	/** 消息区最多保留的条数：再老的直接丢掉，弹窗不是档案库。 */
@@ -2355,7 +2368,6 @@ function createChatDom(opts = {}) {
 		log.appendChild(buildRow(role, text, image));
 		localMsgs.push({ role, text: String(text ?? "") });
 		trimLog();
-		root.classList.add("has-log");
 		log.scrollTop = log.scrollHeight;
 	};
 	/**
@@ -2379,7 +2391,6 @@ function createChatDom(opts = {}) {
 		}
 		log.insertBefore(frag, log.firstChild);
 		trimLog();
-		root.classList.add("has-log");
 		log.scrollTop = log.scrollHeight;
 	};
 	root.append(log, input, actions, hint, err);
@@ -2470,6 +2481,8 @@ function createChatDom(opts = {}) {
 		getAttachment: () => attachment,
 		appendMsg,
 		setHistory,
+		modeBtn,
+		renderMode,
 		getAttachmentPreview: () => thumb.getAttribute("src") || "",
 		isEncoding: () => encoding || capturing,
 		flash,
@@ -2625,6 +2638,7 @@ function mountChatDialog(opts) {
 		h: window.innerHeight
 	};
 	const dom = createChatDom({
+		petId,
 		capture: opts.capture,
 		hearUrl: opts.hearUrl ?? hearUrlOf(baseUrl)
 	});
@@ -2654,6 +2668,8 @@ function mountChatDialog(opts) {
 		isClosed: () => closed,
 		onOk: () => {
 			if (onSent) onSent();
+			// 闲聊模式：发完就收起，等于原来那个「只有输入框」的弹窗；长谈模式留着继续聊
+			if (getChatMode(petId) === "chat") close();
 		},
 		attachment: () => dom.getAttachment(),
 		attachmentPreview: () => dom.getAttachmentPreview(),
@@ -2668,13 +2684,32 @@ function mountChatDialog(opts) {
 	if (opts.initialImage) dom.setImageFile(opts.initialImage);
 	if (opts.initialEncoded) dom.setEncoded(opts.initialEncoded);
 	input.focus();
-	// 预载最近历史：此前弹窗只管输入，重开就看不到上几轮。失败静默——历史只是加分项，不能挡住输入。
-	fetch(withPet + "&rounds=20", { headers: { accept: "application/json" } })
-		.then((r) => r.json())
-		.then((o) => {
-			if (!closed && o && o.ok === true && Array.isArray(o.messages)) dom.setHistory(o.messages);
-		})
-		.catch(() => void 0);
+	// 两种模式同一套 DOM：闲聊=只要输入框（回复看气泡）；长谈=带消息区+历史，长回复还会自动开窗。
+	let historyLoaded = false;
+	const loadHistory = () => {
+		if (historyLoaded) return;
+		historyLoaded = true;
+		fetch(withPet + "&rounds=20", { headers: { accept: "application/json" } })
+			.then((r) => r.json())
+			.then((o) => {
+				if (!closed && o && o.ok === true && Array.isArray(o.messages)) dom.setHistory(o.messages);
+			})
+			.catch(() => void 0);
+	};
+	const syncMode = () => {
+		const talk = getChatMode(petId) === "talk";
+		root.classList.toggle("has-log", talk);
+		dom.renderMode();
+		if (talk) loadHistory();
+		requestAnimationFrame(place);
+	};
+	dom.modeBtn.addEventListener("click", (e) => {
+		e.stopPropagation();
+		const m = toggleChatMode(petId);
+		syncMode();
+		dom.flash(m === "talk" ? "长谈：记录留在这里，长回复自动开窗" : "闲聊：发完就收，回复看气泡");
+	});
+	syncMode();
 	return {
 		el: root,
 		close,
@@ -2721,6 +2756,34 @@ function createHearHold(hooks) {
 //#endregion
 //#region src/shared/chat/hotkey.ts
 const CHAT_HOTKEY_HINT = "L 键";
+/**
+ * 对话模式（按宠物持久化，只存本机）：
+ * - chat 闲聊：长回复只给「继续聊 ▸」，气泡保持安静；
+ * - talk 长谈：长回复自动把对话窗打开，适合追剧/打游戏时聊长内容。
+ * 存在 localStorage 而不是 config：这是高频临时选择，不该触发宿主重载配置。
+ */
+const CHAT_MODES = ["chat", "talk"];
+function chatModeKey(petId) {
+	return "dsh-pet:chatMode:" + String(petId || "main");
+}
+function getChatMode(petId) {
+	try {
+		const v = window.localStorage.getItem(chatModeKey(petId));
+		return CHAT_MODES.includes(v) ? v : "chat";
+	} catch {
+		return "chat";
+	}
+}
+function setChatMode(petId, mode) {
+	const m = CHAT_MODES.includes(mode) ? mode : "chat";
+	try {
+		window.localStorage.setItem(chatModeKey(petId), m);
+	} catch {}
+	return m;
+}
+function toggleChatMode(petId) {
+	return setChatMode(petId, getChatMode(petId) === "chat" ? "talk" : "chat");
+}
 const CAPTURE_HOTKEY_HINT = "S 键";
 function isChatHotkey(e) {
 	return isBareKey(e, "l");
@@ -4884,6 +4947,10 @@ exports.CANVAS_H = CANVAS_H
 exports.CAPTURE_HOTKEY_HINT = CAPTURE_HOTKEY_HINT
 exports.CHAT_CSS = CHAT_CSS
 exports.CHAT_HOTKEY_HINT = CHAT_HOTKEY_HINT
+exports.CHAT_MODES = CHAT_MODES
+exports.getChatMode = getChatMode
+exports.setChatMode = setChatMode
+exports.toggleChatMode = toggleChatMode
 exports.CUSTOM_LIMITS = CUSTOM_LIMITS
 exports.CUSTOM_STYLE_KEYS = CUSTOM_STYLE_KEYS
 exports.CUSTOM_TAGS = CUSTOM_TAGS

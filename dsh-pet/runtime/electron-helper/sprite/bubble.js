@@ -145,6 +145,15 @@ Object.assign(PetSprite.prototype, {
           this.bubble.classList.add('is-clickable');
           this.syncInputBusy();
           this.setInteractive(true);
+          // 长谈模式：长回复不等人点，直接把对话窗顶出来。同一句话只自动开一次——
+          // rAF 每帧都会跑到这里，而 showChatFromMenu 对已开的窗是「再点就关」。
+          const autoText = this.whisperView[0]?.text ?? '';
+          if (!this.chatMount && S.getChatMode(this.pet.id) === 'talk' && this.autoOpenedText !== autoText) {
+            this.autoOpenedText = autoText;
+            setTimeout(() => {
+              if (!this.chatMount && (this.whisperView[0]?.text ?? '') === autoText) this.showChatFromMenu();
+            }, 700);
+          }
         }
       });
       // 语音状态角标：idle 时什么都不加；failed 用静音喇叭，表示这句没念出来
