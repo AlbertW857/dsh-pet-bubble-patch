@@ -19,7 +19,7 @@ if (!fs.existsSync(path.join(dir, 'index.html'))) {
 }
 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-const FILES = ['index.html', 'events.js', 'sprite/bubble.js', 'sprite/input.js'];
+const FILES = ['index.html', 'events.js', 'sprite/bubble.js', 'sprite/input.js', 'sprite/menu.js'];
 
 if (revert) {
   for (const rel of [...FILES, 'shared-core.js']) {
@@ -128,7 +128,7 @@ const EDITS = {
     ['    this.bubbleSlot = slot;', `    this.bubbleSlot = slot;
     // 上一轮可能留了「继续聊」的输入租约：先撤销，溢出判定通过后再立（见 rAF）。
     this.whisperMore = false;`],
-    [OLD_BUBBLE, CLIP_BLOCK],
+    [OLD_BUBBLE, CLIP_BLOCK, 'pet-bub-clip'],
   ],
   'sprite/input.js': [
     ['      this.balanceClickable() ||\n      this.workClickable()',
@@ -142,8 +142,9 @@ for (const [rel, pairs] of Object.entries(EDITS)) {
   const p = path.join(dir, rel);
   let s = fs.readFileSync(p, 'utf8');
   let touched = 0;
-  for (const [a, b] of pairs) {
-    if (s.includes(b)) continue; // 这一处已经打过了
+  for (const [a, b, mark] of pairs) {
+    // 0004 会在气泡块里再插几行，`b` 可能不再是原文；第三项给一个稳定的「已打过」标记
+    if (s.includes(mark ?? b)) continue;
     const c = s.split(a).length - 1;
     if (c !== 1) {
       console.error(`落点不唯一（${rel}，命中 ${c} 次）：`, a.split('\n')[0].slice(0, 60));
@@ -225,6 +226,35 @@ if (fs.existsSync(scPath)) {
     if (!fs.existsSync(bak3)) fs.copyFileSync(scPath, bak3); // 同一轮已备份过就别覆盖（回滚取最早一份）
     fs.writeFileSync(scPath, patched3);
     console.log('已应用 0003：历史预载（备份 shared-core.js.bak-' + stamp + '）。');
+  }
+}
+
+// 0004：闲聊/长谈两种对话模式（多文件补丁：shared-core.js + sprite/bubble.js + sprite/menu.js）
+{
+  const pf4 = path.join(ROOT, 'patches', '0004-chat-mode.patch');
+  const MARK = {
+    'shared-core.js': 'function getChatMode',
+    'sprite/bubble.js': 'getChatMode(this.pet.id)',
+    'sprite/menu.js': "action: 'chat-mode'",
+  };
+  if (fs.existsSync(pf4)) {
+    for (const seg of fs.readFileSync(pf4, 'utf8').split(/^diff --git /m).slice(1)) {
+      const body = 'diff --git ' + seg;
+      const m = /^diff --git a\/(.+?) b\/(.+?)\s*$/m.exec(body);
+      if (!m) continue;
+      const full = m[2];
+      const at = full.indexOf('electron-helper/');
+      const rel = at >= 0 ? full.slice(at + 'electron-helper/'.length) : full;
+      const p = path.join(dir, rel);
+      if (!fs.existsSync(p)) { console.log('跳过 0004：找不到 ' + rel); continue; }
+      const cur = fs.readFileSync(p, 'utf8');
+      if (MARK[rel] && cur.includes(MARK[rel])) { console.log('跳过 0004：' + rel + ' 已有模式开关。'); continue; }
+      const patched = applyUnifiedPatch(cur, body);
+      const bak = p + '.bak-' + stamp;
+      if (!fs.existsSync(bak)) fs.copyFileSync(p, bak);
+      fs.writeFileSync(p, patched);
+      console.log('已应用 0004：' + rel);
+    }
   }
 }
 
