@@ -1,0 +1,76 @@
+diff --git a/dsh-pet/runtime/electron-helper/shared-core.js b/dsh-pet/runtime/electron-helper/shared-core.js
+index c012e05..0710bad 100644
+--- a/dsh-pet/runtime/electron-helper/shared-core.js
++++ b/dsh-pet/runtime/electron-helper/shared-core.js
+@@ -2526,14 +2526,15 @@ function decideEnter(event, watch, now) {
+ //#region src/shared/chat/send.ts
+ /** 对话要等 LLM 生成回复，比碎碎念（30s）放宽一倍 */
+ const SEND_TIMEOUT_MS = 6e4;
+-async function sendChat(baseUrl, text, attachment) {
++async function sendChat(baseUrl, text, attachment, rounds) {
+ 	const res = await fetch(baseUrl, {
+ 		method: "POST",
+ 		headers: { "content-type": "application/json" },
+-		body: JSON.stringify(attachment ? {
++		body: JSON.stringify({
+ 			text,
+-			attachment
+-		} : { text }),
++			...(attachment ? { attachment } : {}),
++			...(typeof rounds === "number" ? { rounds } : {})
++		}),
+ 		signal: AbortSignal.timeout(SEND_TIMEOUT_MS)
+ 	});
+ 	const raw = await res.json().catch(() => null);
+@@ -2585,7 +2586,7 @@ function bindSend(binding) {
+ 		sending = true;
+ 		binding.input.disabled = true;
+ 		binding.appendMsg("user", text, preview);
+-		sendChat(binding.url, text, attachment).then((state) => {
++		sendChat(binding.url, text, attachment, binding.rounds ? binding.rounds() : void 0).then((state) => {
+ 			if (state.ok) {
+ 				if (state.text || state.image) binding.appendMsg("pet", state.text || "", state.image || "");
+ 				else binding.appendMsg("pet", "（这次没有回复）", "");
+@@ -2671,6 +2672,7 @@ function mountChatDialog(opts) {
+ 			// 闲聊模式：发完就收起，等于原来那个「只有输入框」的弹窗；长谈模式留着继续聊
+ 			if (getChatMode(petId) === "chat") close();
+ 		},
++		rounds: () => (getChatMode(petId) === "talk" ? TALK_ROUNDS : void 0),
+ 		attachment: () => dom.getAttachment(),
+ 		attachmentPreview: () => dom.getAttachmentPreview(),
+ 		appendMsg: (role, text, image) => dom.appendMsg(role, text, image),
+@@ -2763,6 +2765,8 @@ const CHAT_HOTKEY_HINT = "L 键";
+  * 存在 localStorage 而不是 config：这是高频临时选择，不该触发宿主重载配置。
+  */
+ const CHAT_MODES = ["chat", "talk"];
++/** 长谈模式一次带多少轮上下文（闲聊跟随配置里的 chatMemoryRounds）。 */
++const TALK_ROUNDS = 10;
+ function chatModeKey(petId) {
+ 	return "dsh-pet:chatMode:" + String(petId || "main");
+ }
+diff --git a/dsh-pet/runtime/electron-helper/sprite/bubble.js b/dsh-pet/runtime/electron-helper/sprite/bubble.js
+index 808a9ce..72122fb 100644
+--- a/dsh-pet/runtime/electron-helper/sprite/bubble.js
++++ b/dsh-pet/runtime/electron-helper/sprite/bubble.js
+@@ -114,9 +114,11 @@ Object.assign(PetSprite.prototype, {
+       // 正文裁到 3 行；溢出的部分由「继续聊 ▸」兜底（点它开对话弹窗）。
+       const clip = document.createElement('div');
+       clip.className = 'pet-bub-clip';
++      const fullText = this.whisperView[0]?.text ?? '';
++      // 对话窗开着时回复已写在窗里，气泡只留摘要，避免同一段话出现两次
+       const line = document.createElement('div');
+       line.className = 'pet-bub-row';
+-      line.textContent = this.whisperView[0]?.text ?? '';
++      line.textContent = this.chatMount && fullText.length > 60 ? fullText.slice(0, 58) + '…' : fullText;
+       clip.appendChild(line);
+       this.bubble.appendChild(clip);
+       const more = document.createElement('span');
+@@ -135,7 +137,7 @@ Object.assign(PetSprite.prototype, {
+       // 否则下一次 renderBubble 重设 className/子节点时类名方案会被抹掉。
+       requestAnimationFrame(() => {
+         if (!this.bubble.contains(clip)) return;
+-        const over = clip.scrollHeight > clip.clientHeight + 1;
++        const over = !this.chatMount && clip.scrollHeight > clip.clientHeight + 1;
+         more.style.display = over ? 'block' : 'none';
+         if (over) {
+           // 整泡参与命中区：主进程按 .pet-bubble.is-clickable 的矩形放行鼠标（见 syncInputBusy）。

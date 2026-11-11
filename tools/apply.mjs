@@ -258,4 +258,30 @@ if (fs.existsSync(scPath)) {
   }
 }
 
-console.log('完成，重启桌面 helper 生效。');
+// 0005：长谈模式带 rounds + 窗开着时气泡只给摘要（多文件补丁：shared-core.js + sprite/bubble.js）
+{
+  const pf5 = path.join(ROOT, 'patches', '0005-chat-rounds.patch');
+  const MARK5 = {
+    'shared-core.js': 'TALK_ROUNDS',
+    'sprite/bubble.js': 'fullText',
+  };
+  if (fs.existsSync(pf5)) {
+    for (const seg of fs.readFileSync(pf5, 'utf8').split(/^diff --git /m).slice(1)) {
+      const body = 'diff --git ' + seg;
+      const m = /^diff --git a\/(.+?) b\/(.+?)\s*$/m.exec(body);
+      if (!m) continue;
+      const full = m[2];
+      const at = full.indexOf('electron-helper/');
+      const rel = at >= 0 ? full.slice(at + 'electron-helper/'.length) : full;
+      const p = path.join(dir, rel);
+      if (!fs.existsSync(p)) { console.log('跳过 0005：找不到 ' + rel); continue; }
+      const cur = fs.readFileSync(p, 'utf8');
+      if (MARK5[rel] && cur.includes(MARK5[rel])) { console.log('跳过 0005：' + rel + ' 已是 P4 版本。'); continue; }
+      fs.copyFileSync(p, p + '.bak-' + stamp);
+      fs.writeFileSync(p, applyUnifiedPatch(cur, body));
+      console.log('已应用 0005：' + rel);
+    }
+  }
+}
+
+console.log('完成，重启桌面 helper 生效（宿主补丁见 tools/apply-host.mjs）。');
