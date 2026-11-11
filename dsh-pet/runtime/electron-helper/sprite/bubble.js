@@ -114,9 +114,11 @@ Object.assign(PetSprite.prototype, {
       // 正文裁到 3 行；溢出的部分由「继续聊 ▸」兜底（点它开对话弹窗）。
       const clip = document.createElement('div');
       clip.className = 'pet-bub-clip';
+      const fullText = this.whisperView[0]?.text ?? '';
+      // 对话窗开着时回复已写在窗里，气泡只留摘要，避免同一段话出现两次
       const line = document.createElement('div');
       line.className = 'pet-bub-row';
-      line.textContent = this.whisperView[0]?.text ?? '';
+      line.textContent = this.chatMount && fullText.length > 60 ? fullText.slice(0, 58) + '…' : fullText;
       clip.appendChild(line);
       this.bubble.appendChild(clip);
       const more = document.createElement('span');
@@ -135,7 +137,7 @@ Object.assign(PetSprite.prototype, {
       // 否则下一次 renderBubble 重设 className/子节点时类名方案会被抹掉。
       requestAnimationFrame(() => {
         if (!this.bubble.contains(clip)) return;
-        const over = clip.scrollHeight > clip.clientHeight + 1;
+        const over = !this.chatMount && clip.scrollHeight > clip.clientHeight + 1;
         more.style.display = over ? 'block' : 'none';
         if (over) {
           // 整泡参与命中区：主进程按 .pet-bubble.is-clickable 的矩形放行鼠标（见 syncInputBusy）。

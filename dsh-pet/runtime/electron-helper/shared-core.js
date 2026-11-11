@@ -2526,14 +2526,15 @@ function decideEnter(event, watch, now) {
 //#region src/shared/chat/send.ts
 /** 对话要等 LLM 生成回复，比碎碎念（30s）放宽一倍 */
 const SEND_TIMEOUT_MS = 6e4;
-async function sendChat(baseUrl, text, attachment) {
+async function sendChat(baseUrl, text, attachment, rounds) {
 	const res = await fetch(baseUrl, {
 		method: "POST",
 		headers: { "content-type": "application/json" },
-		body: JSON.stringify(attachment ? {
+		body: JSON.stringify({
 			text,
-			attachment
-		} : { text }),
+			...(attachment ? { attachment } : {}),
+			...(typeof rounds === "number" ? { rounds } : {})
+		}),
 		signal: AbortSignal.timeout(SEND_TIMEOUT_MS)
 	});
 	const raw = await res.json().catch(() => null);
@@ -2585,7 +2586,7 @@ function bindSend(binding) {
 		sending = true;
 		binding.input.disabled = true;
 		binding.appendMsg("user", text, preview);
-		sendChat(binding.url, text, attachment).then((state) => {
+		sendChat(binding.url, text, attachment, binding.rounds ? binding.rounds() : void 0).then((state) => {
 			if (state.ok) {
 				if (state.text || state.image) binding.appendMsg("pet", state.text || "", state.image || "");
 				else binding.appendMsg("pet", "（这次没有回复）", "");
@@ -2671,6 +2672,7 @@ function mountChatDialog(opts) {
 			// 闲聊模式：发完就收起，等于原来那个「只有输入框」的弹窗；长谈模式留着继续聊
 			if (getChatMode(petId) === "chat") close();
 		},
+		rounds: () => (getChatMode(petId) === "talk" ? TALK_ROUNDS : void 0),
 		attachment: () => dom.getAttachment(),
 		attachmentPreview: () => dom.getAttachmentPreview(),
 		appendMsg: (role, text, image) => dom.appendMsg(role, text, image),
@@ -2763,6 +2765,8 @@ const CHAT_HOTKEY_HINT = "L 键";
  * 存在 localStorage 而不是 config：这是高频临时选择，不该触发宿主重载配置。
  */
 const CHAT_MODES = ["chat", "talk"];
+/** 长谈模式一次带多少轮上下文（闲聊跟随配置里的 chatMemoryRounds）。 */
+const TALK_ROUNDS = 10;
 function chatModeKey(petId) {
 	return "dsh-pet:chatMode:" + String(petId || "main");
 }
