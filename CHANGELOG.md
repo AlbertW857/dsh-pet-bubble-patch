@@ -8,6 +8,15 @@
 - 长回复的展示时长按字数递增（10s → 上限 27s）。
 - 修复桌面端「按钮点不到」：气泡悬在身体命中区之外，窗口会翻回点击穿透；改为用 `whisperMore` 输入租约 + 控件矩形放行鼠标。
 
+## 0.5.0 — 2026-11-12
+
+- P4：长谈模式的上下文轮数
+  - 宿主 `POST /chat` 新增可选 `rounds`（0–200 整数），透传给 `chatWithPet`，覆盖配置 `chatMemoryRounds`
+  - 桌面端仅长谈模式带 `rounds: 10`，闲聊仍按配置（默认 4）
+- P4：对话窗开着时，气泡里的长回复只显示一行摘要（回复已在窗内，不再重复整段）
+- 新增 `tools/apply-host.mjs`：宿主 `lib/index.js` 的锚点式幂等补丁（`--revert` 可用），因为它不是 git 可打的源码
+- `tools/apply.mjs` 支持 `patches/0005-chat-rounds.patch`
+
 ## 0.4.0 — 2026-11-12
 
 - P3：闲聊 / 长谈两种对话模式（`localStorage['dsh-pet:chatMode:<petId>']`，不写 config、不重启）

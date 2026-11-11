@@ -5,7 +5,8 @@
 1. **气泡裁到 3 行**：碎碎念/对话回复太长时不再无限拉高，右下角给「继续聊 ▸」入口；
 2. **对话窗内回显消息**：气泡之后的追问在弹窗里成对显示（你说的话 + 她的回复与配图），不再只能看 10 秒的气泡；
 3. **重开对话窗预载历史**：关掉再开、甚至重启 DSH 之后，窗口里仍是最近 20 轮真实对话（历史存在宿主 `memory.json`，不是窗内缓存）；
-4. **闲聊 / 长谈两种模式**：闲聊＝点「对话」只弹一个小输入框、发完就收，回复看气泡；长谈＝弹带记录的大窗、长回复自动开窗。窗口形态与自动开窗一起切。
+4. **闲聊 / 长谈两种模式**：闲聊＝点「对话」只弹一个小输入框、发完就收，回复看气泡；长谈＝弹带记录的大窗、长回复自动开窗。窗口形态与自动开窗一起切；
+5. **长谈模式记得更久**：长谈发送时带 `rounds: 10`（闲聊仍按配置 `chatMemoryRounds`），对话窗开着时气泡只留一行摘要，不在两处重复整段。
 
 ## 解决的问题
 
@@ -26,6 +27,7 @@
 | `runtime/electron-helper/index.html` | 新增 `.pet-bub-clip`（`max-height:4.8em;overflow:hidden`）与 `.pet-bub-more` 样式 |
 | `runtime/electron-helper/sprite/bubble.js` | 碎碎念正文包进 `.pet-bub-clip`；追加「继续聊 ▸」；rAF 内用 `scrollHeight > clientHeight + 1` 判真实溢出；溢出时置 `whisperMore` 输入租约；长谈模式下长回复到点自动开窗（每句只开一次） |
 | `runtime/electron-helper/sprite/menu.js` | 右键菜单新增「对话模式：闲聊 / 长谈」，只切模式不弹窗 |
+| `lib/index.js`（构建产物，宿主） | `POST /chat` 接受可选 `rounds`（0–200），透传给 `chatWithPet` 覆盖配置轮数；需重启 DSH |
 | `runtime/electron-helper/sprite/input.js` | `inputBusy()` 计入 `whisperMore`；`onMouseMove` 的可交互翻转改为 `inBody || whisperMore` |
 | `runtime/electron-helper/events.js` | `showWhisper` 的停留时长按字数递增，上限 27s |
 | `runtime/electron-helper/shared-core.js` | 对话窗新增 `.dsh-pet-chat-log` 消息区（用户/桌宠成对追加、60 条上限、自动滚底）；`sendChat` 返回 `text`/`image`；配图按 `BASE` 绝对前缀解析（`file://` 页面必需），加载失败自动移除；打开窗口时 `GET /chat?rounds=20` 预载历史，按角色+正文与本地已显示消息去重（P2）；闲聊/长谈模式（localStorage 持久化）决定窗口形态、是否拉历史、发完是否收起（P3） |
@@ -74,6 +76,7 @@ git apply -p4 <仓库>/patches/0001-whisper-overflow.patch   # P0：气泡 3 行
 git apply -p4 <仓库>/patches/0002-chat-log.patch           # P1：对话窗消息区
 git apply -p4 <仓库>/patches/0003-chat-history.patch       # P2：重开预载历史
 git apply -p4 <仓库>/patches/0004-chat-mode.patch          # P3：闲聊/长谈模式（三个文件）
+git apply -p4 <仓库>/patches/0005-chat-rounds.patch        # P4：长谈轮数 + 气泡摘要（两个文件）
 ```
 
 上游若改动了同一段代码，用 `git apply --3way` 或重新按上表手工落点。
@@ -88,7 +91,20 @@ git apply -p4 <仓库>/patches/0004-chat-mode.patch          # P3：闲聊/长�
 - 关窗再开、甚至重启 DSH：消息区里仍是最近 20 轮对话（含配图），刚发的那轮不会重复；
 - 历史变长后窗口不被顶出工作区，输入框仍可正常输入；
 - 闲聊模式：点「对话」只有输入框、没有记录区，发完窗口自己收起，回复出现在气泡；
-- 长谈模式：点「对话」是带记录的大窗；一段长回复后窗口自动弹出；重启 DSH 后模式仍记着。
+- 长谈模式：点「对话」是带记录的大窗；一段长回复后窗口自动弹出；重启 DSH 后模式仍记着；
+- 长谈里追问时事隔多轮仍能接上前文（`rounds: 10`）；对话窗开着时长回复在气泡里只显示一行摘要。
+
+### 宿主部分（P4，需重启 DSH）
+
+`POST /chat` 接受的 `rounds` 是宿主侧改动，宿主不随桌面 helper 重启：
+
+```bash
+node tools/apply-host.mjs            # 默认打 profile 里的 ~/.dsh/profiles/desktop/node_modules/dsh-pet
+node tools/apply-host.mjs --revert   # 回滚
+```
+
+它是锚点式幂等补丁（宿主 `lib/index.js` 是构建产物，上游不提交，没法用 git patch）。验证：重启 DSH 后
+`POST /chat` 带 `"rounds": 999` 应返回 `rounds 必须是 0–200 的整数`。
 
 ## 许可
 
